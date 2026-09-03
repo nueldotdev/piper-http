@@ -1,4 +1,4 @@
-import { PiperRoutes, PiperOptions, Callback, PiperResponse } from "../utils/types";
+import type { PiperRoutes, PiperOptions, PiperRequest, PiperResponse } from "../utils/types.js";
 
 export class Piper {
   private baseURL: string;
@@ -12,7 +12,8 @@ export class Piper {
   }
 
   get(routeKey: string, params?: Record<string, any>) {
-    const urlTemplate = this.routes[routeKey];
+    let urlTemplate: string;
+    this.routes[routeKey] ? urlTemplate = this.routes[routeKey] : urlTemplate = routeKey;
     if (!urlTemplate) throw new Error(`Route "${routeKey}" not defined`);
 
     const url = this.interpolate(urlTemplate, params);
@@ -30,7 +31,7 @@ export class Piper {
       return { status: res.status, data } as PiperResponse;
     };
 
-    return new PiperRequest<PiperResponse>(fetchFn(), fetchFn);
+    return createPiperRequest(fetchFn);
   }
 
   post(
@@ -38,7 +39,8 @@ export class Piper {
     body: Record<string, any>,
     params?: Record<string, any>
   ) {
-    const urlTemplate = this.routes[routeKey];
+    let urlTemplate: string;
+    this.routes[routeKey] ? urlTemplate = this.routes[routeKey] : urlTemplate = routeKey;
     if (!urlTemplate) throw new Error(`Route "${routeKey}" not defined`);
 
     const url = this.interpolate(urlTemplate, params);
@@ -66,7 +68,7 @@ export class Piper {
       return { status: res.status, data } as PiperResponse;
     };
 
-    return new PiperRequest<PiperResponse>(fetchFn(), fetchFn);
+    return createPiperRequest(fetchFn);
   }
 
   private interpolate(template: string, params: Record<string, any> = {}) {
@@ -78,86 +80,38 @@ export class Piper {
 
 
 
-class PiperRequest<T = PiperResponse> {
-  private request: Promise<T>;
-  private lastResolved: T | null = null;
-  private lastError: any = null;
-  private fetchFn: () => Promise<T>;
-  private handlers: {
-    on?: (response: T) => any;
-    fail?: (error: any) => any;
-  } = {};
-  private _processedValue: any = undefined;
+function createPiperRequest<T>(fetchFn: () => Promise<T>): PiperRequest<T> {
+  let lastValue: any;
+  let onResponse: ((response: T) => any) | undefined;
+  let onError: ((error: any) => any) | undefined;
 
-  constructor(fetchPromise: Promise<T>, fetchFn?: () => Promise<T>) {
-    this.request = fetchPromise;
-    this.fetchFn = fetchFn || (() => fetchPromise);
-    this.run();
-  }
-
-  private async run() {
+  const run = async (): Promise<T> => {
     try {
-      const result = await this.fetchFn();
-      if (result && typeof result === "object") {
-        (result as unknown as PiperResponse).new = async () => {
-          await this.run();
-          return this.lastResolved as PiperResponse;
-        };
-      }
-      this.lastResolved = result;
-      if (this.handlers.on) {
-        this._processedValue = this.handlers.on(result);
-      } else {
-        this._processedValue = result;
-      }
-    } catch (err) {
-      this.lastError = err;
-      if (this.handlers.fail) {
-        this._processedValue = this.handlers.fail(err);
-      } else {
-        this._processedValue = err;
-      }
+      const response = await fetchFn();
+      lastValue = onResponse ? onResponse(response) : response;
+      return lastValue;
+    } catch (error) {
+      if (!onError) throw error;
+      lastValue = onError(error);
+      return lastValue;
     }
-  }
+  };
 
-  on(callback: (response: T) => any) {
-    this.handlers.on = callback;
-    if (this.lastResolved) {
-      this._processedValue = callback(this.lastResolved);
-    }
-    return this;
-  }
+  const request = (() => run()) as PiperRequest<T>;
+  request.run = run;
+  request.new = run;
+  request.on = (callback) => {
+    onResponse = callback;
+    return request;
+  };
+  request.fail = (callback) => {
+    onError = callback;
+    return request;
+  };
+  request.value = () => lastValue;
+  request.then = (onfulfilled, onrejected) => run().then(onfulfilled, onrejected);
 
-  fail(callback: (error: any) => any) {
-    this.handlers.fail = callback;
-    if (this.lastError) {
-      this._processedValue = callback(this.lastError);
-    }
-    return this;
-  }
-
-  async new() {
-    await this.run();
-    return this;
-  }
-
-  value() {
-    return this._processedValue;
-  }
-
-  then(resolve: (data: any) => void) {
-    return this.request.then(resolve);
-  }
-
-  catch(reject: (err: any) => void) {
-    return this.request.catch(reject);
-  }
-
-  toJSON() {
-    return this.lastResolved;
-  }
-
-  [Symbol.for("nodejs.util.inspect.custom")]() {
-    return this.lastResolved;
-  }
+  return request;
 }
+
+export type { PiperRequest };
