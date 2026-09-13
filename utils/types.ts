@@ -1,5 +1,5 @@
 type RouteMap = Record<string, string>;
-type Method = 'GET' | 'POST' | 'PUT' | 'DELETE';
+type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'QUERY';
 
 interface PiperResponse {
   status: number;
